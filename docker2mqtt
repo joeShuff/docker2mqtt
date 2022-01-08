@@ -27,13 +27,58 @@ MQTT_TOPIC_PREFIX = environ.get('MQTT_TOPIC_PREFIX', 'docker')
 MQTT_QOS = int(environ.get('MQTT_QOS', 1))
 DISCOVERY_TOPIC = f'{HOMEASSISTANT_PREFIX}/binary_sensor/{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}_{{}}/config'
 WATCHED_EVENTS = ('create', 'destroy', 'die', 'pause', 'rename', 'start', 'stop', 'unpause')
+STATS_DELAY_SECONDS = environ.get('STATS_DELAY', 5)
 
 known_containers = {}
 pending_destroy_operations = {}
 docker_events_cmd = ['docker', 'events', '-f', 'type=container', '--format', '{{json .}}']
+docker_stats_cmd = ['docker', 'stats', '-a', '--format', '{{json .}}', '--no-stream']
 docker_ps_cmd = ['docker', 'ps', '-a', '--format', '{{json .}}']
 invalid_ha_topic_chars = re.compile(r'[^a-zA-Z0-9_-]')
 
+known_container_stats = {}
+
+empty_container_stats = {
+    "cpu": 0,
+    "memory": 0,
+    "memory_usage": "0B / 0B",
+    "net_io": "OB / 0B",
+    "pids": 0,
+    "block_io": "0B / 0B"
+}
+
+topics = {
+    "state": "docker/{}/state",
+    "status": "docker/{}/status",
+    "image": "docker/{}/image",
+    "cpu": "docker/{}/cpu",
+    "memory": "docker/{}/memory",
+    "memory_usage": "docker/{}/memory_usage",
+    "net_io": "docker/{}/net_io",
+    "pids": "docker/{}/pids",
+    "block_io": "docker/{}/block_io",
+    "commands": "docker/{}/commands",
+    "home_assistant":{
+        "state": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_state/config",
+        "status": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_status/config",
+        "image": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_image/config",
+        "cpu": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_cpu/config",
+        "memory": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_memory/config",
+        "memory_usage": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_memory_usage/config",
+        "net_io": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_net_io/config",
+        "pids": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_pids/config",
+        "block_io": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_block_io/config",
+        "stop": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/{{}}_stop/config",
+        "start": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/{{}}_start/config",
+        "restart": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/{{}}_restart/config",
+    }
+}
+
+payload_commands = {
+    "stop": "stop",
+    "start": "start",
+    "restart": "restart",
+}
 
 @atexit.register
 def mqtt_disconnect():
@@ -55,26 +100,205 @@ def mqtt_send(topic, payload, retain=False):
         print(f'MQTT Publish Failed: {e}')
 
 
+def get_container_ps(short_container_id):
+    # Run a command to get the latest info about this container to get accurate data that is missing from the event
+    docker_ps_cont_cmd = ['docker', 'ps', '-a', '--format', '{{json .}}', '-f', f"id={short_container_id}"]
+    docker_ps_cont = run(docker_ps_cont_cmd, stdout=PIPE, text=True)
+    for line in docker_ps_cont.stdout.splitlines():
+        return json.loads(line)
+
+
+def post_info_for_container(container_id):
+    container = known_containers[container_id]
+
+    if container is None:
+        print(f"Cannot find container for ID {container_id}")
+        return
+
+    container_stats = known_container_stats[container_id]
+
+    if container_stats is None:
+        print(f"Cannot find stats for ID {container_id}")
+        return
+
+    container_name = container['name']
+    safe_container_name = container_name.lower().replace(" ", "_")
+    container_image = container['image']
+    container_status = container['status']
+    container_state = container['state']
+
+    mqtt_send(topics['state'].format(container_id), container_state)
+    mqtt_send(topics['status'].format(container_id), container_status)
+    mqtt_send(topics['image'].format(container_id), container_image)
+
+    mqtt_send(topics['cpu'].format(container_id), container_stats['cpu'])
+    mqtt_send(topics['memory'].format(container_id), container_stats['memory'])
+    mqtt_send(topics['memory_usage'].format(container_id), container_stats['memory_usage'])
+    mqtt_send(topics['net_io'].format(container_id), container_stats['net_io'])
+    mqtt_send(topics['pids'].format(container_id), container_stats['pids'])
+    mqtt_send(topics['block_io'].format(container_id), container_stats['block_io'])
+
+
 def register_container(container_entry):
-    """
-    """
-    known_containers[container_entry['name']] = container_entry
-    registration_topic = DISCOVERY_TOPIC.format(invalid_ha_topic_chars.sub('_', container_entry['name']))
-    registration_packet = {
-        'name': f"{MQTT_TOPIC_PREFIX.title()} {container_entry['name']}",
-        'unique_id': f'{MQTT_TOPIC_PREFIX}_{DOCKER2MQTT_HOSTNAME}_{registration_topic}',
+    container_name = container_entry['name']
+    safe_container_name = container_name.lower().replace(" ", "_")
+    container_id = container_entry['id']
+    container_image = container_entry['image']
+
+    base_config = {
         'availability_topic': f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status',
-        'payload_available': 'online',
-        'payload_not_available': 'offline',
-        'state_topic': f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/{container_entry["name"]}',
-        'value_template': '{{ value_json.state }}',
-        'payload_on': 'on',
-        'payload_off': 'off',
-        'device_class': 'connectivity',
-        'json_attributes_topic': f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/{container_entry["name"]}',
+        'device': {
+            "name": container_name,
+            "manufacturer": "Docker",
+            "model": container_image,
+            "identifiers": container_id,
+            "sw_version": container_image,
+            "via_device": "docker2mqtt",
+        },
     }
-    mqtt_send(registration_topic, json.dumps(registration_packet), retain=True)
-    mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/{container_entry["name"]}', json.dumps(container_entry), retain=True)
+
+    state_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['state'].format(container_id),
+        "name": f"{container_name} State",
+        "unique_id": f"{container_id}.state",
+        "entity_category": "config",
+        "icon": "mdi:chart-line-variant"
+    }
+    state_discovery = topics['home_assistant']['state'].format(container_id, safe_container_name)
+    mqtt_send(state_discovery, json.dumps(state_entity_config), retain=True)
+
+    status_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['status'].format(container_id),
+        "name": f"{container_name} Status",
+        "unique_id": f"{container_id}.status",
+        "entity_category": "config",
+        "icon": "mdi:chart-line-variant"
+    }
+    status_discovery = topics['home_assistant']['status'].format(container_id, safe_container_name)
+    mqtt_send(status_discovery, json.dumps(status_entity_config), retain=True)
+
+    image_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['image'].format(container_id),
+        "name": f"{container_name} Image",
+        "unique_id": f"{container_id}.image",
+        "entity_category": "config",
+        "icon": "mdi:docker"
+    }
+    image_discovery = topics['home_assistant']['image'].format(container_id, safe_container_name)
+    mqtt_send(image_discovery, json.dumps(image_entity_config), retain=True)
+
+    cpu_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['cpu'].format(container_id),
+        "name": f"{container_name} CPU Usage",
+        "unique_id": f"{container_id}.cpu",
+        "unit_of_measurement": "%",
+        "entity_category": "diagnostic",
+        "icon": "mdi:cpu-64-bit"
+    }
+    cpu_discovery = topics['home_assistant']['cpu'].format(container_id, safe_container_name)
+    mqtt_send(cpu_discovery, json.dumps(cpu_entity_config), retain=True)
+
+    memory_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['memory'].format(container_id),
+        "name": f"{container_name} Memory",
+        "unique_id": f"{container_id}.memory",
+        "unit_of_measurement": "%",
+        "entity_category": "diagnostic",
+        "icon": "mdi:memory"
+    }
+    memory_discovery = topics['home_assistant']['memory'].format(container_id, safe_container_name)
+    mqtt_send(memory_discovery, json.dumps(memory_entity_config), retain=True)
+
+    memory_usage_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['memory_usage'].format(container_id),
+        "name": f"{container_name} Memory Usage",
+        "unique_id": f"{container_id}.memory_usage",
+        "entity_category": "diagnostic",
+        "enabled_by_default": False,
+        "icon": "mdi:memory"
+    }
+    memory_usage_discovery = topics['home_assistant']['memory_usage'].format(container_id, safe_container_name)
+    mqtt_send(memory_usage_discovery, json.dumps(memory_usage_entity_config), retain=True)
+
+    net_io_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['net_io'].format(container_id),
+        "name": f"{container_name} Network IO",
+        "unique_id": f"{container_id}.net_io",
+        "entity_category": "diagnostic",
+        "enabled_by_default": False,
+        "icon": "mdi:lan-connect"
+    }
+    net_io_usage_discovery = topics['home_assistant']['net_io'].format(container_id, safe_container_name)
+    mqtt_send(net_io_usage_discovery, json.dumps(net_io_entity_config), retain=True)
+
+    pids_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['pids'].format(container_id),
+        "name": f"{container_name} PIDs",
+        "unique_id": f"{container_id}.pids",
+        "entity_category": "diagnostic",
+        "enabled_by_default": False,
+        "icon": "mid:memory",
+    }
+    pids_discovery = topics['home_assistant']['pids'].format(container_id, safe_container_name)
+    mqtt_send(pids_discovery, json.dumps(pids_entity_config), retain=True)
+
+    block_io_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "state_topic": topics['block_io'].format(container_id),
+        "name": f"{container_name} Block IO",
+        "unique_id": f"{container_id}.block_io",
+        "entity_category": "diagnostic",
+        "enabled_by_default": False,
+        "icon": "mdi:tape-drive"
+    }
+    block_io_discovery = topics['home_assistant']['block_io'].format(container_id, safe_container_name)
+    mqtt_send(block_io_discovery, json.dumps(block_io_entity_config), retain=True)
+
+    stop_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "command_topic": topics['commands'].format(container_id),
+        "name": f"{container_name} Stop",
+        "unique_id": f"{container_id}.stop",
+        "icon": "mdi:stop",
+        "payload_press": payload_commands['stop']
+    }
+    stop_discovery = topics['home_assistant']['stop'].format(container_id, safe_container_name)
+    mqtt_send(stop_discovery, json.dumps(stop_entity_config), retain=True)
+
+    start_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "command_topic": topics['commands'].format(container_id),
+        "name": f"{container_name} Start",
+        "unique_id": f"{container_id}.start",
+        "icon": "mdi:play",
+        "payload_press": payload_commands['start']
+    }
+    start_discovery = topics['home_assistant']['start'].format(container_id, safe_container_name)
+    mqtt_send(start_discovery, json.dumps(start_entity_config), retain=True)
+
+    restart_entity_config = base_config | {
+        "qos": MQTT_QOS,
+        "command_topic": topics['commands'].format(container_id),
+        "name": f"{container_name} Restart",
+        "unique_id": f"{container_id}.restart",
+        "icon": "mdi:restart",
+        "payload_press": payload_commands['restart']
+    }
+    restart_discovery = topics['home_assistant']['restart'].format(container_id, safe_container_name)
+    mqtt_send(restart_discovery, json.dumps(restart_entity_config), retain=True)
+
+    known_containers[container_id] = container_entry
+    known_container_stats[container_id] = empty_container_stats
+
+    post_info_for_container(container_id)
 
 
 def readline_thread():
@@ -85,12 +309,59 @@ def readline_thread():
             docker_events.put(proc.stdout.readline())
 
 
+def readline_stats_thread():
+    """Run thread to read docker stats
+    """
+    while True:
+        docker_stats = run(docker_stats_cmd, stdout=PIPE, text=True)
+        for line in docker_stats.stdout.splitlines():
+            stats = json.loads(line)
+            container_id = stats['Container']
+
+            known_container_stats[container_id]['cpu'] = float(stats['CPUPerc'].replace("%", ""))
+            known_container_stats[container_id]['memory'] = float(stats['MemPerc'].replace("%", ""))
+            known_container_stats[container_id]['memory_usage'] = stats['MemUsage']
+            known_container_stats[container_id]['net_io'] = stats['NetIO']
+            known_container_stats[container_id]['pids'] = stats['PIDs']
+            known_container_stats[container_id]['block_io'] = stats['BlockIO']
+
+            post_info_for_container(container_id)
+
+        sleep(STATS_DELAY_SECONDS)
+
+
+def on_mqtt_message(client, userdata, msg):
+    print("Message received->" + msg.topic + " > " + str(msg.payload.decode()))
+
+    command = msg.payload.decode()
+    container_id = msg.topic.split("/")[1]
+    container_status = get_container_ps(container_id)
+    container_running = container_status['State'] == "running"
+
+    if command == "start" and not container_running:
+        run(f"docker start {container_id}")
+    elif command == "start":
+        print("Can't start an already running container")
+
+    if command == "stop" and container_running:
+        run(f"docker stop {container_id}")
+    elif command == "stop":
+        print("Can't stop an already stopped container")
+
+    if command == "restart":
+        run(f"docker restart {container_id}")
+
+
 if __name__ == '__main__':
     # Setup MQTT
     mqtt = paho.mqtt.client.Client()
     mqtt.username_pw_set(username=MQTT_USER,password=MQTT_PASSWD)
     mqtt.will_set(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'offline', qos=MQTT_QOS, retain=True)
     mqtt.connect(MQTT_HOST, MQTT_PORT, MQTT_TIMEOUT)
+    mqtt.on_message = on_mqtt_message
+
+    mqtt.subscribe(topics['commands'].format("+"))
+
     mqtt.loop_start()
     mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'online', retain=True)
 
@@ -98,23 +369,19 @@ if __name__ == '__main__':
     docker_ps = run(docker_ps_cmd, stdout=PIPE, text=True)
     for line in docker_ps.stdout.splitlines():
         container_status = json.loads(line)
-
-        if 'Paused' in container_status['Status']:
-            status_str = 'paused'
-            state_str = 'off'
-        elif 'Up' in container_status['Status']:
-            status_str = 'running'
-            state_str = 'on'
-        else:
-            status_str = 'stopped'
-            state_str = 'off'
         
         register_container({
+            'id': container_status['ID'],
             'name': container_status['Names'],
             'image': container_status['Image'],
-            'status': status_str,
-            'state': state_str
+            'status': container_status['Status'],
+            'state': container_status['State']
         })
+
+    # Start the docker stats thread
+    docker_stats = {}
+    docker_stats_t = Thread(target=readline_stats_thread, daemon=True)
+    docker_stats_t.start()
 
     # Start the docker events thread
     docker_events = queue.Queue()
@@ -143,66 +410,35 @@ if __name__ == '__main__':
         if event['status'] not in WATCHED_EVENTS:
             continue
 
-        container = event['Actor']['Attributes']['name']
+        container_name = event['Actor']['Attributes']['name']
+        container_id = event['id']
+        short_container_id = container_id[:12]
+        container_status = get_container_ps(short_container_id)
 
         if event['status'] == 'create':
             # Cancel any previous pending destroys and add this to known_containers.
-            print(f'Container {container} has been created.')
-            if container in pending_destroy_operations:
-                print(f'Removing pending delete for {{container}}.')
-                del(pending_destroy_operations[container])
+            print(f'Container {container_name} has been created.')
+
+            if container_name in pending_destroy_operations:
+                print(f'Removing pending delete for {{container_name}}.')
+                del(pending_destroy_operations[container_name])
 
             register_container({
-                'name': container,
+                'name': container_name,
                 'image': event['from'],
                 'status': 'created',
-                'state': 'off'
+                'state': 'off',
+                'id': short_container_id
             })
-
-        elif event['status'] == 'destroy':
-            # Add this container to pending_destroy_operations.
-            print(f'Container {container} has been destroyed.')
-            pending_destroy_operations[container] = time()
-            known_containers[container]['status'] = 'destroyed'
-            known_containers[container]['state'] = 'off'
-
-        elif event['status'] == 'die':
-            print(f'Container {container} has stopped.')
-            known_containers[container]['status'] = 'stopped'
-            known_containers[container]['state'] = 'off'
-
-        elif event['status'] == 'pause':
-            print(f'Container {container} has paused.')
-            known_containers[container]['status'] = 'paused'
-            known_containers[container]['state'] = 'off'
-
-        elif event['status'] == 'rename':
-            old_name = event['Actor']['Attributes']['oldName']
-            if old_name.startswith('/'):
-                old_name = old_name[1:]
-            print(f'Container {old_name} renamed to {container}.')
-            mqtt_send(f'{HOMEASSISTANT_PREFIX}/binary_sensor/{MQTT_TOPIC_PREFIX}/{old_name}/config', '', retain=True)
-            mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/{old_name}', '', retain=True)
-            register_container({
-                'name': container,
-                'image': known_containers[old_name]['image'],
-                'status': known_containers[old_name]['status'],
-                'state': known_containers[old_name]['state']
-            })
-            del(known_containers[old_name])
-
-        elif event['status'] == 'start':
-            print(f'Container {container} has started.')
-            known_containers[container]['status'] = 'running'
-            known_containers[container]['state'] = 'on'
-
-        elif event['status'] == 'unpause':
-            print(f'Container {container} has unpaused.')
-            known_containers[container]['status'] = 'running'
-            known_containers[container]['state'] = 'on'
-
         else:
-            # Don't send an MQTT packet if nothing has changed
-            continue
+            known_containers[short_container_id]['status'] = container_status['Status']
+            known_containers[short_container_id]['state'] = container_status['State']
+            known_containers[short_container_id]['image'] = container_status['Image']
+            known_containers[short_container_id]['name'] = container_status['Names']
 
-        mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/{container}', json.dumps(known_containers[container]), retain=True)
+        if event['status'] == 'destroy':
+            # Add this container to pending_destroy_operations.
+            print(f'Container {container_name} has been destroyed.')
+            pending_destroy_operations[container_name] = time()
+
+        post_info_for_container(short_container_id)
