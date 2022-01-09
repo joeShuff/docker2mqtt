@@ -27,6 +27,7 @@ services:
     - MQTT_TIMEOUT=30
     - MQTT_TOPIC_PREFIX=docker
     - MQTT_QOS=1
+    - STATS_DELAY=5
     restart: always
     volumes:
     - type: volume
@@ -38,36 +39,32 @@ services:
 
 You can use environment variables to control the behavior.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEBUG` | | Set to `1` to enable additional debug logging. |
-| `DESTROYED_CONTAINER_TTL` | 86400 | How long, in seconds, before destroyed containers are removed from Home Assistant. Containers won't be removed if the service is restarted before the TTL expires. |
-| `DOCKER2MQTT_HOSTNAME` | Container Hostname | The hostname of your docker host. This will be the container's hostname by default, you probably want to override it. |
-| `HOMEASSISTANT_PREFIX` | `homeassistant` | The prefix for Home Assistant discovery. Must be the same as `discovery_prefix` in your Home Assistant configuration. |
-| `MQTT_CLIENT_ID` | `mqtt2discord` | The client id to send to the MQTT broker. |
-| `MQTT_HOST` | `localhost` | The MQTT broker to connect to. |
-| `MQTT_PORT` | `1883` | The port on the broker to connect to. |
-| `MQTT_USER` | `` | The user to send to the MQTT broker. Leave unset to disable authentication. |
-| `MQTT_PASSWD` | `` | The password to send to the MQTT broker. Leave unset to disable authentication. |
-| `MQTT_TIMEOUT` | `30` | The timeout for the MQTT connection. |
-| `MQTT_TOPIC_PREFIX` | `ping` | The MQTT topic prefix. With the default data will be published to `ping/<hostname>`. |
-| `MQTT_QOS` | `1` | The MQTT QOS level |
+| Variable                  | Default            | Description                                                                                                                                                        |
+|---------------------------|--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `DEBUG`                   |                    | Set to `1` to enable additional debug logging.                                                                                                                     |
+| `DESTROYED_CONTAINER_TTL` | 86400              | How long, in seconds, before destroyed containers are removed from Home Assistant. Containers won't be removed if the service is restarted before the TTL expires. |
+| `DOCKER2MQTT_HOSTNAME`    | Container Hostname | The hostname of your docker host. This will be the container's hostname by default, you probably want to override it.                                              |
+| `HOMEASSISTANT_PREFIX`    | `homeassistant`    | The prefix for Home Assistant discovery. Must be the same as `discovery_prefix` in your Home Assistant configuration.                                              |
+| `MQTT_CLIENT_ID`          | `docker2mqtt`      | The client id to send to the MQTT broker.                                                                                                                          |
+| `MQTT_HOST`               | `localhost`        | The MQTT broker to connect to.                                                                                                                                     |
+| `MQTT_PORT`               | `1883`             | The port on the broker to connect to.                                                                                                                              |
+| `MQTT_USER`               | ``                 | The user to send to the MQTT broker. Leave unset to disable authentication.                                                                                        |
+| `MQTT_PASSWD`             | ``                 | The password to send to the MQTT broker. Leave unset to disable authentication.                                                                                    |
+| `MQTT_TIMEOUT`            | `30`               | The timeout for the MQTT connection.                                                                                                                               |
+| `MQTT_TOPIC_PREFIX`       | `ping`             | The MQTT topic prefix. With the default data will be published to `ping/<hostname>`.                                                                               |
+| `MQTT_QOS`                | `1`                | The MQTT QOS level                                                                                                                                                 |
+| `STATS_DELAY`             | `5`                | Seconds between the `docker stats` command being ran and reported via MQTT.                                                                                        |
+ 
 
 # Consuming The Data
 
-Data is published to the topic `docker/<DOCKER2MQTT_HOSTNAME>/<container>` using JSON serialization. It will arrive whenever a change happens and takes the following form:
+Data is published to various topics of the style `docker/<CONTAINER_ID>/<container_stat>`. Here is an example of the data created per container.
 
-```yaml
-{
-    'name': <Container Name>,
-    'image': <Container Image>,
-    'status': <'paused', 'running', or 'stopped'>,
-    'state': <'on' or 'off'>
-}
-```
+![Screenshot showing example mqtt topics](art/mqtt_topics.png)
 
 # Home Assistant
 
-After you start the service binary sensors should show up in Home Assistant immediately. Look for sensors that start with `binary_sensor.docker`. Metadata about the container will be available as attributes, which you can then expose using template sensors if you wish. 
+After you start the service, devices should show up in Home Assistant immediately. Look for devices with Manufacturer `Docker`.
+All the metadata, stats and controls for each container are entities in the device.
 
-![Screenshot of Home Assistant sensor showing status and attributes.](ha_screenshot.png)
+![Screenshot of Home Assistant sensor showing status and attributes.](art/ha_screenshot.png)
