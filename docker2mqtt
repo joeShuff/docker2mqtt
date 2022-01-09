@@ -74,6 +74,9 @@ topics = {
     }
 }
 
+'''
+Map commands sent via mqtt to the docker command equivalent
+'''
 payload_commands = {
     "stop": "stop",
     "start": "start",
