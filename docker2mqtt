@@ -119,6 +119,7 @@ def get_docker_system_stats():
 
     return docker_system_stats
 
+
 def get_container_ps(short_container_id):
     # Run a command to get the latest info about this container to get accurate data that is missing from the event
     docker_ps_cont_cmd = ['docker', 'ps', '-a', '--format', '{{json .}}', '-f', f"id={short_container_id}"]
@@ -157,6 +158,8 @@ def post_info_for_container(container_id):
     mqtt_send(topics['net_io'].format(container_id), container_stats['net_io'])
     mqtt_send(topics['pids'].format(container_id), container_stats['pids'])
     mqtt_send(topics['block_io'].format(container_id), container_stats['block_io'])
+
+    mqtt_send(topics['commands'].format(container_id), '')
 
 
 def register_container(container_entry):
@@ -333,6 +336,23 @@ def register_container(container_entry):
     post_info_for_container(container_id)
 
 
+def unregister_container(short_id):
+    container = known_containers[short_id]
+
+    container_name = container['name']
+    safe_container_name = container_name.lower().replace(" ", "_")
+
+    for entity_topic in topics['home_assistant'].keys():
+        formatted = topics['home_assistant'][entity_topic].format(short_id, safe_container_name)
+        mqtt_send(formatted, '', retain=True)
+
+    for state_topic in topics.keys():
+        if isinstance(topics[state_topic], str):
+            mqtt_send(topics[state_topic].format(short_id), '', retain=True)
+
+    del(known_containers[short_container_id])
+
+
 def readline_thread():
     """Run docker events and continually read lines from it.
     """
@@ -375,6 +395,10 @@ def on_mqtt_message(client, userdata, msg):
     command = msg.payload.decode()
     container_id = msg.topic.split("/")[1]
     container_status = get_container_ps(container_id)
+
+    if container_status is None:
+        return
+
     container_running = container_status['State'] == "running"
 
     if command == "start" and not container_running:
@@ -432,13 +456,11 @@ if __name__ == '__main__':
     # Loop and wait for new events
     while True:
         # Remove any destroyed containers that have passed the TTL
-        for container, destroyed_at in pending_destroy_operations.copy().items():
+        for short_container_id, destroyed_at in pending_destroy_operations.copy().items():
             if time() - destroyed_at > DESTROYED_CONTAINER_TTL:
-                print(f'Removing container {container} from MQTT.')
-                registration_topic = DISCOVERY_TOPIC.format(invalid_ha_topic_chars.sub('_', container))
-                mqtt_send(registration_topic, '', retain=True)
-                mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/{container}', '', retain=True)
-                del(pending_destroy_operations[container])
+                print(f'Removing container {short_container_id} from MQTT.')
+                unregister_container(short_container_id)
+                del(pending_destroy_operations[short_container_id])
 
         # Collect and process an event from `docker events`
         try:
@@ -471,15 +493,14 @@ if __name__ == '__main__':
                 'state': 'off',
                 'id': short_container_id
             })
+        elif event['status'] == 'destroy':
+            # Add this container to pending_destroy_operations.
+            print(f'Container {container_name} has been destroyed.')
+            pending_destroy_operations[short_container_id] = time()
         else:
             known_containers[short_container_id]['status'] = container_status['Status']
             known_containers[short_container_id]['state'] = container_status['State']
             known_containers[short_container_id]['image'] = container_status['Image']
             known_containers[short_container_id]['name'] = container_status['Names']
-
-        if event['status'] == 'destroy':
-            # Add this container to pending_destroy_operations.
-            print(f'Container {container_name} has been destroyed.')
-            pending_destroy_operations[container_name] = time()
 
         post_info_for_container(short_container_id)
