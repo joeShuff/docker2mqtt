@@ -65,19 +65,19 @@ topics = {
     "block_io": "docker/{}/block_io",
     "commands": "docker/{}/commands",
     "home_assistant":{
-        "state": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_state/config",
-        "status": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_status/config",
-        "image": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_image/config",
-        "cpu": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_cpu/config",
-        "1cpu": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_1cpu/config",
-        "memory": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_memory/config",
-        "memory_usage": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_memory_usage/config",
-        "net_io": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_net_io/config",
-        "pids": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_pids/config",
-        "block_io": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/{{}}_block_io/config",
-        "stop": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/{{}}_stop/config",
-        "start": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/{{}}_start/config",
-        "restart": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/{{}}_restart/config",
+        "state": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/state/config",
+        "status": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/status/config",
+        "image": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/image/config",
+        "cpu": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/cpu/config",
+        "1cpu": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/1cpu/config",
+        "memory": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/memory/config",
+        "memory_usage": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/memory_usage/config",
+        "net_io": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/net_io/config",
+        "pids": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/pids/config",
+        "block_io": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/block_io/config",
+        "stop": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/stop/config",
+        "start": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/start/config",
+        "restart": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/restart/config",
     }
 }
 
@@ -159,8 +159,6 @@ def post_info_for_container(container_id):
     mqtt_send(topics['pids'].format(container_id), container_stats['pids'])
     mqtt_send(topics['block_io'].format(container_id), container_stats['block_io'])
 
-    mqtt_send(topics['commands'].format(container_id), '')
-
 
 def register_container(container_entry):
     container_name = container_entry['name']
@@ -188,7 +186,7 @@ def register_container(container_entry):
         "entity_category": "config",
         "icon": "mdi:chart-line-variant"
     }
-    state_discovery = topics['home_assistant']['state'].format(container_id, safe_container_name)
+    state_discovery = topics['home_assistant']['state'].format(container_id)
     mqtt_send(state_discovery, json.dumps(state_entity_config), retain=True)
 
     status_entity_config = base_config | {
@@ -199,7 +197,7 @@ def register_container(container_entry):
         "entity_category": "config",
         "icon": "mdi:chart-line-variant"
     }
-    status_discovery = topics['home_assistant']['status'].format(container_id, safe_container_name)
+    status_discovery = topics['home_assistant']['status'].format(container_id)
     mqtt_send(status_discovery, json.dumps(status_entity_config), retain=True)
 
     image_entity_config = base_config | {
@@ -210,7 +208,7 @@ def register_container(container_entry):
         "entity_category": "config",
         "icon": "mdi:docker"
     }
-    image_discovery = topics['home_assistant']['image'].format(container_id, safe_container_name)
+    image_discovery = topics['home_assistant']['image'].format(container_id)
     mqtt_send(image_discovery, json.dumps(image_entity_config), retain=True)
 
     cpu_entity_config = base_config | {
@@ -222,7 +220,7 @@ def register_container(container_entry):
         "entity_category": "diagnostic",
         "icon": "mdi:cpu-64-bit"
     }
-    cpu_discovery = topics['home_assistant']['cpu'].format(container_id, safe_container_name)
+    cpu_discovery = topics['home_assistant']['cpu'].format(container_id)
     mqtt_send(cpu_discovery, json.dumps(cpu_entity_config), retain=True)
 
     overall_cpu_entity_config = base_config | {
@@ -234,7 +232,7 @@ def register_container(container_entry):
         "entity_category": "diagnostic",
         "icon": "mdi:cpu-64-bit"
     }
-    overall_cpu_discovery = topics['home_assistant']['1cpu'].format(container_id, safe_container_name)
+    overall_cpu_discovery = topics['home_assistant']['1cpu'].format(container_id)
     mqtt_send(overall_cpu_discovery, json.dumps(overall_cpu_entity_config), retain=True)
 
     memory_entity_config = base_config | {
@@ -246,7 +244,7 @@ def register_container(container_entry):
         "entity_category": "diagnostic",
         "icon": "mdi:memory"
     }
-    memory_discovery = topics['home_assistant']['memory'].format(container_id, safe_container_name)
+    memory_discovery = topics['home_assistant']['memory'].format(container_id)
     mqtt_send(memory_discovery, json.dumps(memory_entity_config), retain=True)
 
     memory_usage_entity_config = base_config | {
@@ -258,7 +256,7 @@ def register_container(container_entry):
         "enabled_by_default": False,
         "icon": "mdi:memory"
     }
-    memory_usage_discovery = topics['home_assistant']['memory_usage'].format(container_id, safe_container_name)
+    memory_usage_discovery = topics['home_assistant']['memory_usage'].format(container_id)
     mqtt_send(memory_usage_discovery, json.dumps(memory_usage_entity_config), retain=True)
 
     net_io_entity_config = base_config | {
@@ -270,7 +268,7 @@ def register_container(container_entry):
         "enabled_by_default": False,
         "icon": "mdi:lan-connect"
     }
-    net_io_usage_discovery = topics['home_assistant']['net_io'].format(container_id, safe_container_name)
+    net_io_usage_discovery = topics['home_assistant']['net_io'].format(container_id)
     mqtt_send(net_io_usage_discovery, json.dumps(net_io_entity_config), retain=True)
 
     pids_entity_config = base_config | {
@@ -282,7 +280,7 @@ def register_container(container_entry):
         "enabled_by_default": False,
         "icon": "mid:memory",
     }
-    pids_discovery = topics['home_assistant']['pids'].format(container_id, safe_container_name)
+    pids_discovery = topics['home_assistant']['pids'].format(container_id)
     mqtt_send(pids_discovery, json.dumps(pids_entity_config), retain=True)
 
     block_io_entity_config = base_config | {
@@ -294,7 +292,7 @@ def register_container(container_entry):
         "enabled_by_default": False,
         "icon": "mdi:tape-drive"
     }
-    block_io_discovery = topics['home_assistant']['block_io'].format(container_id, safe_container_name)
+    block_io_discovery = topics['home_assistant']['block_io'].format(container_id)
     mqtt_send(block_io_discovery, json.dumps(block_io_entity_config), retain=True)
 
     stop_entity_config = base_config | {
@@ -305,7 +303,7 @@ def register_container(container_entry):
         "icon": "mdi:stop",
         "payload_press": payload_commands['stop']
     }
-    stop_discovery = topics['home_assistant']['stop'].format(container_id, safe_container_name)
+    stop_discovery = topics['home_assistant']['stop'].format(container_id)
     mqtt_send(stop_discovery, json.dumps(stop_entity_config), retain=True)
 
     start_entity_config = base_config | {
@@ -316,7 +314,7 @@ def register_container(container_entry):
         "icon": "mdi:play",
         "payload_press": payload_commands['start']
     }
-    start_discovery = topics['home_assistant']['start'].format(container_id, safe_container_name)
+    start_discovery = topics['home_assistant']['start'].format(container_id)
     mqtt_send(start_discovery, json.dumps(start_entity_config), retain=True)
 
     restart_entity_config = base_config | {
@@ -327,8 +325,10 @@ def register_container(container_entry):
         "icon": "mdi:restart",
         "payload_press": payload_commands['restart']
     }
-    restart_discovery = topics['home_assistant']['restart'].format(container_id, safe_container_name)
+    restart_discovery = topics['home_assistant']['restart'].format(container_id)
     mqtt_send(restart_discovery, json.dumps(restart_entity_config), retain=True)
+
+    mqtt_send(topics['commands'].format(container_id), '---')
 
     known_containers[container_id] = container_entry
     known_container_stats[container_id] = empty_container_stats
@@ -343,7 +343,7 @@ def unregister_container(short_id):
     safe_container_name = container_name.lower().replace(" ", "_")
 
     for entity_topic in topics['home_assistant'].keys():
-        formatted = topics['home_assistant'][entity_topic].format(short_id, safe_container_name)
+        formatted = topics['home_assistant'][entity_topic].format(short_id)
         mqtt_send(formatted, '', retain=True)
 
     for state_topic in topics.keys():
@@ -397,6 +397,9 @@ def on_mqtt_message(client, userdata, msg):
     container_status = get_container_ps(container_id)
 
     if container_status is None:
+        return
+
+    if command == "---":
         return
 
     container_running = container_status['State'] == "running"
@@ -497,6 +500,14 @@ if __name__ == '__main__':
             # Add this container to pending_destroy_operations.
             print(f'Container {container_name} has been destroyed.')
             pending_destroy_operations[short_container_id] = time()
+        elif event['status'] == "rename":
+            register_container({
+                'name': container_name,
+                'image': event['from'],
+                'status': 'created',
+                'state': 'off',
+                'id': short_container_id
+            })
         else:
             known_containers[short_container_id]['status'] = container_status['Status']
             known_containers[short_container_id]['state'] = container_status['State']
