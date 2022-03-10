@@ -5,6 +5,7 @@ import atexit
 import json
 import queue
 import re
+import threading
 from os import environ
 from socket import gethostname
 from subprocess import run, Popen, PIPE
@@ -36,7 +37,13 @@ docker_stats_cmd = ['docker', 'stats', '-a', '--format', '{{json .}}', '--no-str
 docker_ps_cmd = ['docker', 'ps', '-a', '--format', '{{json .}}']
 invalid_ha_topic_chars = re.compile(r'[^a-zA-Z0-9_-]')
 
+mqtt = paho.mqtt.client.Client()
+
+connected_to_mqtt = False
+
 known_container_stats = {}
+
+docker_events = queue.Queue()
 
 docker_system_stats = {
 
@@ -90,10 +97,103 @@ payload_commands = {
     "restart": "restart",
 }
 
-@atexit.register
+
+'''
+MQTT CALLBACKS
+'''
+def on_mqtt_connect(client, userdata, flags, rc):
+    global connected_to_mqtt
+
+    if rc == 0:
+        connected_to_mqtt = True
+
+        print(f'Connected to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
+
+        register_all_containers()
+    else:
+        connected_to_mqtt = False
+        print(f'Failed to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT} reason: {rc}')
+
+
+def on_mqtt_message(client, userdata, msg):
+    print("Message received->" + msg.topic + " > " + str(msg.payload.decode()))
+
+    command = msg.payload.decode()
+    container_id = msg.topic.split("/")[1]
+    container_status = get_container_ps(container_id)
+
+    if container_status is None:
+        return
+
+    if command == "---":
+        return
+
+    container_running = container_status['State'] == "running"
+
+    if command == "start" and not container_running:
+        run(f"docker start {container_id}")
+    elif command == "start":
+        print("Can't start an already running container")
+
+    if command == "stop" and container_running:
+        run(f"docker stop {container_id}")
+    elif command == "stop":
+        print("Can't stop an already stopped container")
+
+    if command == "restart":
+        run(f"docker restart {container_id}")
+
+
+def on_mqtt_disconnect(client, userdata, rc):
+    global connected_to_mqtt
+
+    print(f'Disconnected from MQTT server (reason:{rc})')
+    connected_to_mqtt = False
+
+
+'''
+MQTT MANAGEMENT
+'''
+def setup_mqtt():
+    global mqtt
+
+    mqtt = paho.mqtt.client.Client()
+    mqtt.username_pw_set(username=MQTT_USER, password=MQTT_PASSWD)
+    mqtt.will_set(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'offline', qos=MQTT_QOS, retain=True)
+    mqtt.on_connect = on_mqtt_connect
+    mqtt.on_disconnect = on_mqtt_disconnect
+    mqtt.on_message = on_mqtt_message
+
+
+def mqtt_connect(exit_on_fail=False):
+    global mqtt, connected_to_mqtt
+
+    try:
+        print(f'Attempting to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
+        mqtt.connect(MQTT_HOST, MQTT_PORT, MQTT_TIMEOUT)
+        connected_to_mqtt = True
+
+        mqtt.subscribe(topics['commands'].format("+"))
+
+        mqtt.loop_start()
+        mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'online', retain=True)
+        return True
+    except ConnectionRefusedError as e:
+        print(f'Failed to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
+        print(e)
+        connected_to_mqtt = False
+
+        if exit_on_fail:
+            exit(0)
+
+        return False
+
+
 def mqtt_disconnect():
-    """Called by atexit to make sure we send our last_will message.
-    """
+    global connected_to_mqtt
+
+    print(f'Disconnecting from MQTT voluntarily')
+    connected_to_mqtt = False
     mqtt.publish(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'offline', qos=MQTT_QOS, retain=True)
     mqtt.disconnect()
     sleep(1)
@@ -101,15 +201,19 @@ def mqtt_disconnect():
 
 
 def mqtt_send(topic, payload, retain=False):
-    try:
-        if DEBUG:
-            print(f'Sending to MQTT: {topic}: {payload}')
-        mqtt.publish(topic, payload=payload, qos=MQTT_QOS, retain=retain)
+    global connected_to_mqtt
 
-    except Exception as e:
-        print(f'MQTT Publish Failed: {e}')
+    if connected_to_mqtt:
+        try:
+            if DEBUG:
+                print(f'Sending to MQTT: {topic}: {payload}')
+            mqtt.publish(topic, payload=payload, qos=MQTT_QOS, retain=retain)
+        except Exception as e:
+            print(f'MQTT Publish Failed: {e}')
 
-
+'''
+CONTAINER MANAGEMENT
+'''
 def get_docker_system_stats():
     global docker_system_stats
     docker_system_stats_cmd = ['docker', 'system', 'info', '--format', '{{json .}}']
@@ -168,6 +272,7 @@ def register_container(container_entry):
 
     base_config = {
         'availability_topic': f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status',
+        'expire_after': STATS_DELAY_SECONDS * 2,
         'device': {
             "name": container_name,
             "manufacturer": "Docker",
@@ -336,6 +441,21 @@ def register_container(container_entry):
     post_info_for_container(container_id)
 
 
+def register_all_containers():
+    # Register containers with HA
+    docker_ps = run(docker_ps_cmd, stdout=PIPE, text=True)
+    for line in docker_ps.stdout.splitlines():
+        container_status = json.loads(line)
+
+        register_container({
+            'id': container_status['ID'],
+            'name': container_status['Names'],
+            'image': container_status['Image'],
+            'status': container_status['Status'],
+            'state': container_status['State']
+        })
+
+
 def unregister_container(short_id):
     container = known_containers[short_id]
 
@@ -350,20 +470,32 @@ def unregister_container(short_id):
         if isinstance(topics[state_topic], str):
             mqtt_send(topics[state_topic].format(short_id), '', retain=True)
 
-    del(known_containers[short_container_id])
+    del(known_containers[short_id])
 
 
+def cleanup_containers():
+    # Remove any destroyed containers that have passed the TTL
+    for short_container_id, destroyed_at in pending_destroy_operations.copy().items():
+        if time() - destroyed_at > DESTROYED_CONTAINER_TTL:
+            print(f'Removing container {short_container_id} from MQTT.')
+            unregister_container(short_container_id)
+            del (pending_destroy_operations[short_container_id])
+
+
+'''
+CONTROL THREADS
+'''
 def readline_thread():
-    """Run docker events and continually read lines from it.
-    """
+    """Run docker events and continually read lines from it."""
+    global docker_events
+
     with Popen(docker_events_cmd, stdout=PIPE, text=True) as proc:
         while True:
             docker_events.put(proc.stdout.readline())
 
 
 def readline_stats_thread():
-    """Run thread to read docker stats
-    """
+    """Run thread to read docker stats"""
     while True:
         docker_stats = run(docker_stats_cmd, stdout=PIPE, text=True)
         for line in docker_stats.stdout.splitlines():
@@ -384,70 +516,28 @@ def readline_stats_thread():
             known_container_stats[container_id]['pids'] = stats['PIDs']
             known_container_stats[container_id]['block_io'] = stats['BlockIO']
 
+        docker_ps = run(docker_ps_cmd, stdout=PIPE, text=True)
+        for line in docker_ps.stdout.splitlines():
+            container_status = json.loads(line)
+            container_id = container_status['ID']
+
+            container_details = known_containers[container_id]
+
+            container_details['name'] = container_status['Names']
+            container_details['image'] = container_status['Image']
+            container_details['status'] = container_status['Status']
+            container_details['state'] = container_status['State']
+
+        for container_id in known_containers.keys():
             post_info_for_container(container_id)
 
         sleep(STATS_DELAY_SECONDS)
 
 
-def on_mqtt_message(client, userdata, msg):
-    print("Message received->" + msg.topic + " > " + str(msg.payload.decode()))
-
-    command = msg.payload.decode()
-    container_id = msg.topic.split("/")[1]
-    container_status = get_container_ps(container_id)
-
-    if container_status is None:
-        return
-
-    if command == "---":
-        return
-
-    container_running = container_status['State'] == "running"
-
-    if command == "start" and not container_running:
-        run(f"docker start {container_id}")
-    elif command == "start":
-        print("Can't start an already running container")
-
-    if command == "stop" and container_running:
-        run(f"docker stop {container_id}")
-    elif command == "stop":
-        print("Can't stop an already stopped container")
-
-    if command == "restart":
-        run(f"docker restart {container_id}")
-
-
-if __name__ == '__main__':
-    # Setup MQTT
-    mqtt = paho.mqtt.client.Client()
-    mqtt.username_pw_set(username=MQTT_USER,password=MQTT_PASSWD)
-    mqtt.will_set(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'offline', qos=MQTT_QOS, retain=True)
-    mqtt.connect(MQTT_HOST, MQTT_PORT, MQTT_TIMEOUT)
-    mqtt.on_message = on_mqtt_message
-
-    mqtt.subscribe(topics['commands'].format("+"))
-
-    mqtt.loop_start()
-    mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'online', retain=True)
-
-    # Register containers with HA
-    docker_ps = run(docker_ps_cmd, stdout=PIPE, text=True)
-    for line in docker_ps.stdout.splitlines():
-        container_status = json.loads(line)
-        
-        register_container({
-            'id': container_status['ID'],
-            'name': container_status['Names'],
-            'image': container_status['Image'],
-            'status': container_status['Status'],
-            'state': container_status['State']
-        })
-
-    get_docker_system_stats()
+def start_threads():
+    global docker_events
 
     # Start the docker stats thread
-    docker_stats = {}
     docker_stats_t = Thread(target=readline_stats_thread, daemon=True)
     docker_stats_t.start()
 
@@ -456,62 +546,81 @@ if __name__ == '__main__':
     docker_events_t = Thread(target=readline_thread, daemon=True)
     docker_events_t.start()
 
+
+def process_events():
+    global docker_events, known_containers
+
+    # Collect and process an event from `docker events`
+    try:
+        line = docker_events.get(timeout=1)
+    except queue.Empty:
+        # No data right now, just move along.
+        return
+
+    event = json.loads(line)
+    if event['status'] not in WATCHED_EVENTS:
+        return
+
+    container_name = event['Actor']['Attributes']['name']
+    container_id = event['id']
+    short_container_id = container_id[:12]
+    container_status = get_container_ps(short_container_id)
+
+    if event['status'] == 'create':
+        # Cancel any previous pending destroys and add this to known_containers.
+        print(f'Container {container_name} has been created.')
+
+        if container_name in pending_destroy_operations:
+            print(f'Removing pending delete for {{container_name}}.')
+            del (pending_destroy_operations[container_name])
+
+        register_container({
+            'name': container_name,
+            'image': event['from'],
+            'status': 'created',
+            'state': 'off',
+            'id': short_container_id
+        })
+    elif event['status'] == 'destroy':
+        # Add this container to pending_destroy_operations.
+        print(f'Container {container_name} has been destroyed.')
+        pending_destroy_operations[short_container_id] = time()
+    elif event['status'] == "rename":
+        register_container({
+            'name': container_name,
+            'image': event['from'],
+            'status': 'created',
+            'state': 'off',
+            'id': short_container_id
+        })
+    else:
+        known_containers[short_container_id]['status'] = container_status['Status']
+        known_containers[short_container_id]['state'] = container_status['State']
+        known_containers[short_container_id]['image'] = container_status['Image']
+        known_containers[short_container_id]['name'] = container_status['Names']
+
+    post_info_for_container(short_container_id)
+
+
+if __name__ == '__main__':
+    setup_mqtt()
+
+    mqtt_connect(True)
+
+    get_docker_system_stats()
+
+    start_threads()
+
     # Loop and wait for new events
     while True:
-        # Remove any destroyed containers that have passed the TTL
-        for short_container_id, destroyed_at in pending_destroy_operations.copy().items():
-            if time() - destroyed_at > DESTROYED_CONTAINER_TTL:
-                print(f'Removing container {short_container_id} from MQTT.')
-                unregister_container(short_container_id)
-                del(pending_destroy_operations[short_container_id])
+        if not connected_to_mqtt:
+            print("MQTT not connected: Retrying...")
 
-        # Collect and process an event from `docker events`
-        try:
-            line = docker_events.get(timeout=1)
-        except queue.Empty:
-            # No data right now, just move along.
-            continue
- 
-        event = json.loads(line)
-        if event['status'] not in WATCHED_EVENTS:
-            continue
-
-        container_name = event['Actor']['Attributes']['name']
-        container_id = event['id']
-        short_container_id = container_id[:12]
-        container_status = get_container_ps(short_container_id)
-
-        if event['status'] == 'create':
-            # Cancel any previous pending destroys and add this to known_containers.
-            print(f'Container {container_name} has been created.')
-
-            if container_name in pending_destroy_operations:
-                print(f'Removing pending delete for {{container_name}}.')
-                del(pending_destroy_operations[container_name])
-
-            register_container({
-                'name': container_name,
-                'image': event['from'],
-                'status': 'created',
-                'state': 'off',
-                'id': short_container_id
-            })
-        elif event['status'] == 'destroy':
-            # Add this container to pending_destroy_operations.
-            print(f'Container {container_name} has been destroyed.')
-            pending_destroy_operations[short_container_id] = time()
-        elif event['status'] == "rename":
-            register_container({
-                'name': container_name,
-                'image': event['from'],
-                'status': 'created',
-                'state': 'off',
-                'id': short_container_id
-            })
+            setup_mqtt()
+            if not mqtt_connect():
+                sleep(10)
+            else:
+                connected_to_mqtt = True
         else:
-            known_containers[short_container_id]['status'] = container_status['Status']
-            known_containers[short_container_id]['state'] = container_status['State']
-            known_containers[short_container_id]['image'] = container_status['Image']
-            known_containers[short_container_id]['name'] = container_status['Names']
-
-        post_info_for_container(short_container_id)
+            cleanup_containers()
+            process_events()
