@@ -272,7 +272,7 @@ def register_container(container_entry):
 
     base_config = {
         'availability_topic': f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status',
-        'expire_after': STATS_DELAY_SECONDS * 2,
+        'expire_after': STATS_DELAY_SECONDS * 60,
         'device': {
             "name": container_name,
             "manufacturer": "Docker",
