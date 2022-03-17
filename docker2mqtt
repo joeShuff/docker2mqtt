@@ -436,7 +436,7 @@ def register_container(container_entry):
     mqtt_send(topics['commands'].format(container_id), '---')
 
     known_containers[container_id] = container_entry
-    known_container_stats[container_id] = empty_container_stats
+    known_container_stats[container_id] = empty_container_stats.copy()
 
     post_info_for_container(container_id)
 
