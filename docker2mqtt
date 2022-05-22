@@ -502,31 +502,33 @@ def readline_stats_thread():
             stats = json.loads(line)
             container_id = stats['Container']
 
-            cpu = float(stats['CPUPerc'].replace("%", ""))
-            cpu_count = docker_system_stats['NCPU']
+            if container_id in known_container_stats.keys():
+                cpu = float(stats['CPUPerc'].replace("%", ""))
+                cpu_count = docker_system_stats['NCPU']
 
-            known_container_stats[container_id]['cpu'] = float(stats['CPUPerc'].replace("%", ""))
+                known_container_stats[container_id]['cpu'] = float(stats['CPUPerc'].replace("%", ""))
 
-            if cpu_count is not None and cpu_count > 0:
-                known_container_stats[container_id]['1_cpu'] = cpu / cpu_count
+                if cpu_count is not None and cpu_count > 0:
+                    known_container_stats[container_id]['1_cpu'] = cpu / cpu_count
 
-            known_container_stats[container_id]['memory'] = float(stats['MemPerc'].replace("%", ""))
-            known_container_stats[container_id]['memory_usage'] = stats['MemUsage']
-            known_container_stats[container_id]['net_io'] = stats['NetIO']
-            known_container_stats[container_id]['pids'] = stats['PIDs']
-            known_container_stats[container_id]['block_io'] = stats['BlockIO']
+                known_container_stats[container_id]['memory'] = float(stats['MemPerc'].replace("%", ""))
+                known_container_stats[container_id]['memory_usage'] = stats['MemUsage']
+                known_container_stats[container_id]['net_io'] = stats['NetIO']
+                known_container_stats[container_id]['pids'] = stats['PIDs']
+                known_container_stats[container_id]['block_io'] = stats['BlockIO']
 
         docker_ps = run(docker_ps_cmd, stdout=PIPE, text=True)
         for line in docker_ps.stdout.splitlines():
             container_status = json.loads(line)
             container_id = container_status['ID']
 
-            container_details = known_containers[container_id]
+            if container_id in known_container_stats.keys():
+                container_details = known_containers[container_id]
 
-            container_details['name'] = container_status['Names']
-            container_details['image'] = container_status['Image']
-            container_details['status'] = container_status['Status']
-            container_details['state'] = container_status['State']
+                container_details['name'] = container_status['Names']
+                container_details['image'] = container_status['Image']
+                container_details['status'] = container_status['Status']
+                container_details['state'] = container_status['State']
 
         for container_id in known_containers.keys():
             post_info_for_container(container_id)
