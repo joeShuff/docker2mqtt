@@ -131,17 +131,22 @@ def on_mqtt_message(client, userdata, msg):
     container_running = container_status['State'] == "running"
 
     if command == "start" and not container_running:
-        run(f"docker start {container_id}")
+        docker_start_command = ['docker', 'start', f'{container_id}']
+        run(docker_start_command, stdout=PIPE, text=True)
     elif command == "start":
         print("Can't start an already running container")
 
     if command == "stop" and container_running:
-        run(f"docker stop {container_id}")
+        docker_stop_command = ['docker', 'stop', f'{container_id}']
+        run(docker_stop_command, stdout=PIPE, text=True)
     elif command == "stop":
         print("Can't stop an already stopped container")
 
     if command == "restart":
-        run(f"docker restart {container_id}")
+        docker_restart_command = ['docker', 'restart', f'{container_id}']
+        run(docker_restart_command, stdout=PIPE, text=True)
+
+    mqtt_send(msg.topic, "---")
 
 
 def on_mqtt_disconnect(client, userdata, rc):
