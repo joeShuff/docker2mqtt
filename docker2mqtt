@@ -117,7 +117,8 @@ def on_mqtt_connect(client, userdata, flags, rc):
 
 
 def on_mqtt_message(client, userdata, msg):
-    print("Message received->" + msg.topic + " > " + str(msg.payload.decode()))
+    if DEBUG:
+        print("Message received->" + msg.topic + " > " + str(msg.payload.decode()))
 
     command = msg.payload.decode()
     container_id = msg.topic.split("/")[1]
@@ -128,13 +129,16 @@ def on_mqtt_message(client, userdata, msg):
     Cleans up old stuff ideally.
     '''
     if HOMEASSISTANT_PREFIX in msg.topic and msg.topic not in cleaned_topics:
-        cleaned_topics.append(msg.topic)
-        container_id = msg.topic.split("docker-")[1].split("/")[0]
+        try:
+            cleaned_topics.append(msg.topic)
+            container_id = msg.topic.split("docker-")[1].split("/")[0]
 
-        if container_id not in known_containers.keys():
-            mqtt_send(msg.topic, '')
+            if container_id not in known_containers.keys():
+                mqtt_send(msg.topic, '')
 
-        return
+            return
+        except Exception as e:
+            print(f"Error deciding whether to delete this topic {e}")
 
     if container_status is None:
         return
