@@ -256,17 +256,16 @@ def get_container_ps(short_container_id):
 
 
 def post_info_for_container(container_id):
-    container = known_containers[container_id]
-
-    if container is None:
+    if container_id not in known_containers.keys():
         print(f"Cannot find container for ID {container_id}")
         return
 
-    container_stats = known_container_stats[container_id]
-
-    if container_stats is None:
+    if container_id not in known_container_stats.keys():
         print(f"Cannot find stats for ID {container_id}")
         return
+
+    container = known_containers[container_id]
+    container_stats = known_container_stats[container_id]
 
     container_name = container['name']
     safe_container_name = container_name.lower().replace(" ", "_")
