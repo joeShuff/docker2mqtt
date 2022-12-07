@@ -494,6 +494,12 @@ def subscribe_to_clean_mqtt():
 
 
 def unregister_container(short_id):
+    if short_id not in known_containers.keys():
+        if DEBUG:
+            print("Not unregistering unknown container")
+
+        return
+
     container = known_containers[short_id]
 
     container_name = container['name']
@@ -633,10 +639,11 @@ def process_events():
             'id': short_container_id
         })
     else:
-        known_containers[short_container_id]['status'] = container_status['Status']
-        known_containers[short_container_id]['state'] = container_status['State']
-        known_containers[short_container_id]['image'] = container_status['Image']
-        known_containers[short_container_id]['name'] = container_status['Names']
+        if short_container_id in known_containers.keys():
+            known_containers[short_container_id]['status'] = container_status['Status']
+            known_containers[short_container_id]['state'] = container_status['State']
+            known_containers[short_container_id]['image'] = container_status['Image']
+            known_containers[short_container_id]['name'] = container_status['Names']
 
     post_info_for_container(short_container_id)
 
