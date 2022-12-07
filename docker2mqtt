@@ -134,7 +134,10 @@ def on_mqtt_message(client, userdata, msg):
             container_id = msg.topic.split("docker-")[1].split("/")[0]
 
             if container_id not in known_containers.keys():
-                mqtt_send(msg.topic, '')
+                if DEBUG:
+                    print(f"Clearing container {container_id}")
+
+                mqtt_send(msg.topic, "", retain=True, qos=0)
 
             return
         except Exception as e:
@@ -223,14 +226,14 @@ def mqtt_disconnect():
     mqtt.loop_stop()
 
 
-def mqtt_send(topic, payload, retain=False):
+def mqtt_send(topic, payload, retain=False, qos=MQTT_QOS):
     global connected_to_mqtt
 
     if connected_to_mqtt:
         try:
             if DEBUG:
                 print(f'Sending to MQTT: {topic}: {payload}')
-            mqtt.publish(topic, payload=payload, qos=MQTT_QOS, retain=retain)
+            mqtt.publish(topic, payload=payload, qos=qos, retain=retain)
         except Exception as e:
             print(f'MQTT Publish Failed: {e}')
 
@@ -477,8 +480,10 @@ def register_all_containers():
             'state': container_status['State']
         })
 
+    subscribe_to_clean_mqtt()
 
-def clean_mqtt():
+
+def subscribe_to_clean_mqtt():
     global mqtt_cleaned
 
     if not mqtt_cleaned:
@@ -662,4 +667,3 @@ if __name__ == '__main__':
                 connected_to_mqtt = True
         else:
             go()
-            clean_mqtt()
