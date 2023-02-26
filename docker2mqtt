@@ -30,7 +30,6 @@ WATCHED_EVENTS = ('create', 'destroy', 'die', 'pause', 'rename', 'start', 'stop'
 STATS_DELAY_SECONDS = environ.get('STATS_DELAY', 5)
 
 known_containers = {}
-pending_destroy_operations = {}
 docker_events_cmd = ['docker', 'events', '-f', 'type=container', '--format', '{{json .}}']
 docker_stats_cmd = ['docker', 'stats', '-a', '--format', '{{json .}}', '--no-stream']
 docker_ps_cmd = ['docker', 'ps', '-a', '--format', '{{json .}}']
@@ -511,15 +510,6 @@ def unregister_container(short_id):
     del(known_containers[short_id])
 
 
-def cleanup_containers():
-    # Remove any destroyed containers that have passed the TTL
-    for short_container_id, destroyed_at in pending_destroy_operations.copy().items():
-        if time() - destroyed_at > DESTROYED_CONTAINER_TTL:
-            log(tag="Cleanup", message=f'Removing container {short_container_id} from MQTT.')
-            unregister_container(short_container_id)
-            del (pending_destroy_operations[short_container_id])
-
-
 '''
 CONTROL THREADS
 '''
@@ -613,10 +603,6 @@ def process_events():
         # Cancel any previous pending destroys and add this to known_containers.
         log(tag="Event", message=f'Container {container_name} has been created.')
 
-        if short_container_id in pending_destroy_operations:
-            log(tag="Event", message=f'Removing pending delete for {{container_name}}.')
-            del (pending_destroy_operations[short_container_id])
-
         register_container({
             'name': container_name,
             'image': event['from'],
@@ -627,7 +613,7 @@ def process_events():
     elif event['status'] == 'destroy':
         # Add this container to pending_destroy_operations.
         log(tag="Event", message=f'Container {container_name} has been destroyed.')
-        pending_destroy_operations[short_container_id] = time()
+        unregister_container(short_container_id)
     elif event['status'] == "rename":
         old_name = event['Actor']['Attributes']['oldName']
         log(tag="Event", message=f"Container {old_name} renamed to {container_name}")
@@ -649,7 +635,6 @@ def process_events():
 
 
 def go():
-    cleanup_containers()
     process_events()
 
 
