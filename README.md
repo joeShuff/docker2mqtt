@@ -14,9 +14,10 @@ version: '3'
 services:
   docker2mqtt:
     container_name: docker2mqtt
-    image: skullydazed/docker2mqtt
+    image: denizenn/docker2mqtt
     environment:
-    - DESTROYED_CONTAINER_TTL=86400
+    - DEBUG=0
+    - MQTT_DEBUG=0
     - DOCKER2MQTT_HOSTNAME=my_docker_host
     - HOMEASSISTANT_PREFIX=homeassistant
     - MQTT_CLIENT_ID=docker2mqtt
@@ -39,21 +40,21 @@ services:
 
 You can use environment variables to control the behavior.
 
-| Variable                  | Default            | Description                                                                                                                                                        |
-|---------------------------|--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `DEBUG`                   |                    | Set to `1` to enable additional debug logging.                                                                                                                     |
-| `DESTROYED_CONTAINER_TTL` | 86400              | How long, in seconds, before destroyed containers are removed from Home Assistant. Containers won't be removed if the service is restarted before the TTL expires. |
-| `DOCKER2MQTT_HOSTNAME`    | Container Hostname | The hostname of your docker host. This will be the container's hostname by default, you probably want to override it.                                              |
-| `HOMEASSISTANT_PREFIX`    | `homeassistant`    | The prefix for Home Assistant discovery. Must be the same as `discovery_prefix` in your Home Assistant configuration.                                              |
-| `MQTT_CLIENT_ID`          | `docker2mqtt`      | The client id to send to the MQTT broker.                                                                                                                          |
-| `MQTT_HOST`               | `localhost`        | The MQTT broker to connect to.                                                                                                                                     |
-| `MQTT_PORT`               | `1883`             | The port on the broker to connect to.                                                                                                                              |
-| `MQTT_USER`               | ``                 | The user to send to the MQTT broker. Leave unset to disable authentication.                                                                                        |
-| `MQTT_PASSWD`             | ``                 | The password to send to the MQTT broker. Leave unset to disable authentication.                                                                                    |
-| `MQTT_TIMEOUT`            | `30`               | The timeout for the MQTT connection.                                                                                                                               |
-| `MQTT_TOPIC_PREFIX`       | `ping`             | The MQTT topic prefix. With the default data will be published to `ping/<hostname>`.                                                                               |
-| `MQTT_QOS`                | `1`                | The MQTT QOS level                                                                                                                                                 |
-| `STATS_DELAY`             | `5`                | Seconds between the `docker stats` command being ran and reported via MQTT.                                                                                        |
+| Variable                  | Default            | Description                                                                                                           |
+|---------------------------|--------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `DEBUG`                   | 0                  | Set to `1` to enable additional debug logging.                                                                        |
+| `MQTT_DEBUG`              | 0                  | Set to `1` to enable MQTT message logging.                                                                            |
+| `DOCKER2MQTT_HOSTNAME`    | Container Hostname | The hostname of your docker host. This will be the container's hostname by default, you probably want to override it. |
+| `HOMEASSISTANT_PREFIX`    | `homeassistant`    | The prefix for Home Assistant discovery. Must be the same as `discovery_prefix` in your Home Assistant configuration. |
+| `MQTT_CLIENT_ID`          | `docker2mqtt`      | The client id to send to the MQTT broker.                                                                             |
+| `MQTT_HOST`               | `localhost`        | The MQTT broker to connect to.                                                                                        |
+| `MQTT_PORT`               | `1883`             | The port on the broker to connect to.                                                                                 |
+| `MQTT_USER`               | ``                 | The user to send to the MQTT broker. Leave unset to disable authentication.                                           |
+| `MQTT_PASSWD`             | ``                 | The password to send to the MQTT broker. Leave unset to disable authentication.                                       |
+| `MQTT_TIMEOUT`            | `30`               | The timeout for the MQTT connection.                                                                                  |
+| `MQTT_TOPIC_PREFIX`       | `ping`             | The MQTT topic prefix. With the default data will be published to `ping/<hostname>`.                                  |
+| `MQTT_QOS`                | `1`                | The MQTT QOS level                                                                                                    |
+| `STATS_DELAY`             | `5`                | Seconds between the `docker stats` command being ran and reported via MQTT.                                           |
  
 
 # Consuming The Data

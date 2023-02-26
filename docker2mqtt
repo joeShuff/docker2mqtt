@@ -12,9 +12,8 @@ from time import sleep, time
 
 import paho.mqtt.client
 
-DEBUG = environ.get('DEBUG', '1') == '1'
-MQTT_DEBUG = environ.get('MQTT_DEBUG', '1') == '1'
-DESTROYED_CONTAINER_TTL = int(environ.get('DESTROYED_CONTAINER_TTL', 24*60*60))
+DEBUG = environ.get('DEBUG', '0') == '1'
+MQTT_DEBUG = environ.get('MQTT_DEBUG', '0') == '1'
 HOMEASSISTANT_PREFIX = environ.get('HOMEASSISTANT_PREFIX', 'homeassistant')
 DOCKER2MQTT_HOSTNAME = environ.get('DOCKER2MQTT_HOSTNAME', gethostname())
 MQTT_CLIENT_ID = environ.get('MQTT_CLIENT_ID', 'docker2mqtt')
