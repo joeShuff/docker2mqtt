@@ -6,13 +6,14 @@ import queue
 import re
 from os import environ
 from socket import gethostname
-from subprocess import run, Popen, PIPE
+from subprocess import run, Popen, PIPE, call
 from threading import Thread
 from time import sleep, time
 
 import paho.mqtt.client
 
 DEBUG = environ.get('DEBUG', '1') == '1'
+MQTT_DEBUG = environ.get('MQTT_DEBUG', '1') == '1'
 DESTROYED_CONTAINER_TTL = int(environ.get('DESTROYED_CONTAINER_TTL', 24*60*60))
 HOMEASSISTANT_PREFIX = environ.get('HOMEASSISTANT_PREFIX', 'homeassistant')
 DOCKER2MQTT_HOSTNAME = environ.get('DOCKER2MQTT_HOSTNAME', gethostname())
@@ -98,6 +99,13 @@ payload_commands = {
     "restart": "restart",
 }
 
+'''
+LOGS
+'''
+def log(message, tag = "DOCKER2MQTT"):
+    if DEBUG:
+        print(f"{tag}: {message}")
+
 
 '''
 MQTT CALLBACKS
@@ -108,17 +116,17 @@ def on_mqtt_connect(client, userdata, flags, rc):
     if rc == 0:
         connected_to_mqtt = True
 
-        print(f'Connected to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
+        log(tag="MQTT", message=f'Connected to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
 
         register_all_containers()
     else:
         connected_to_mqtt = False
-        print(f'Failed to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT} reason: {rc}')
+        log(tag="MQTT", message=f'Failed to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT} reason: {rc}')
 
 
 def on_mqtt_message(client, userdata, msg):
-    if DEBUG:
-        print("Message received->" + msg.topic + " > " + str(msg.payload.decode()))
+    if MQTT_DEBUG:
+        log(tag="MQTT", message="Message received->" + msg.topic + " > " + str(msg.payload.decode()))
 
     command = msg.payload.decode()
     container_id = msg.topic.split("/")[1]
@@ -134,14 +142,12 @@ def on_mqtt_message(client, userdata, msg):
             container_id = msg.topic.split("docker-")[1].split("/")[0]
 
             if container_id not in known_containers.keys():
-                if DEBUG:
-                    print(f"Clearing container {container_id}")
-
+                log(tag="Event", message=f"Clearing container {container_id} topic {msg.topic}")
                 mqtt_send(msg.topic, "", retain=True, qos=0)
 
             return
         except Exception as e:
-            print(f"Error deciding whether to delete this topic {e}")
+            log(tag="Error", message=f"Error deciding whether to delete this topic {e}")
 
     if container_status is None:
         return
@@ -152,20 +158,17 @@ def on_mqtt_message(client, userdata, msg):
     container_running = container_status['State'] == "running"
 
     if command == "start" and not container_running:
-        docker_start_command = ['docker', 'start', f'{container_id}']
-        run(docker_start_command, stdout=PIPE, text=True)
+        call(f'docker start {container_id}')
     elif command == "start":
-        print("Can't start an already running container")
+        log(tag="Command", message="Can't start an already running container")
 
     if command == "stop" and container_running:
-        docker_stop_command = ['docker', 'stop', f'{container_id}']
-        run(docker_stop_command, stdout=PIPE, text=True)
+        call(f'docker stop {container_id}')
     elif command == "stop":
-        print("Can't stop an already stopped container")
+        log(tag="Command", message="Can't stop an already stopped container")
 
     if command == "restart":
-        docker_restart_command = ['docker', 'restart', f'{container_id}']
-        run(docker_restart_command, stdout=PIPE, text=True)
+        call(f'docker restart {container_id}')
 
     mqtt_send(msg.topic, "---")
 
@@ -173,7 +176,7 @@ def on_mqtt_message(client, userdata, msg):
 def on_mqtt_disconnect(client, userdata, rc):
     global connected_to_mqtt
 
-    print(f'Disconnected from MQTT server (reason:{rc})')
+    log(tag="MQTT", message=f'Disconnected from MQTT server (reason:{rc})')
     connected_to_mqtt = False
 
 
@@ -195,7 +198,7 @@ def mqtt_connect(exit_on_fail=False):
     global mqtt, connected_to_mqtt
 
     try:
-        print(f'Attempting to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
+        log(tag="MQTT", message=f'Attempting to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
         mqtt.connect(MQTT_HOST, MQTT_PORT, MQTT_TIMEOUT)
         connected_to_mqtt = True
 
@@ -205,8 +208,7 @@ def mqtt_connect(exit_on_fail=False):
         mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'online', retain=True)
         return True
     except ConnectionRefusedError as e:
-        print(f'Failed to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
-        print(e)
+        log(tag="Error", message=f'Failed to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT}. reason {e}')
         connected_to_mqtt = False
 
         if exit_on_fail:
@@ -218,7 +220,7 @@ def mqtt_connect(exit_on_fail=False):
 def mqtt_disconnect():
     global connected_to_mqtt
 
-    print(f'Disconnecting from MQTT voluntarily')
+    log(tag="MQTT", message=f'Disconnecting from MQTT voluntarily')
     connected_to_mqtt = False
     mqtt.publish(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'offline', qos=MQTT_QOS, retain=True)
     mqtt.disconnect()
@@ -231,11 +233,11 @@ def mqtt_send(topic, payload, retain=False, qos=MQTT_QOS):
 
     if connected_to_mqtt:
         try:
-            if DEBUG:
-                print(f'Sending to MQTT: {topic}: {payload}')
+            if MQTT_DEBUG:
+                log(tag="MQTT", message=f'Sending to MQTT: {topic}: {payload}')
             mqtt.publish(topic, payload=payload, qos=qos, retain=retain)
         except Exception as e:
-            print(f'MQTT Publish Failed: {e}')
+            log(tag="MQTT", message=f'MQTT Publish Failed: {e}')
 
 '''
 CONTAINER MANAGEMENT
@@ -260,18 +262,16 @@ def get_container_ps(short_container_id):
 
 def post_info_for_container(container_id):
     if container_id not in known_containers.keys():
-        print(f"Cannot find container for ID {container_id}")
+        log(tag="Error", message=f"Cannot find container for ID {container_id}")
         return
 
     if container_id not in known_container_stats.keys():
-        print(f"Cannot find stats for ID {container_id}")
+        log(tag="Error", message=f"Cannot find stats for ID {container_id}")
         return
 
     container = known_containers[container_id]
     container_stats = known_container_stats[container_id]
 
-    container_name = container['name']
-    safe_container_name = container_name.lower().replace(" ", "_")
     container_image = container['image']
     container_status = container['status']
     container_state = container['state']
@@ -495,23 +495,18 @@ def subscribe_to_clean_mqtt():
 
 def unregister_container(short_id):
     if short_id not in known_containers.keys():
-        if DEBUG:
-            print("Not unregistering unknown container")
-
+        log(tag="Error", message="Not unregistering unknown container")
         return
 
     container = known_containers[short_id]
 
-    container_name = container['name']
-    safe_container_name = container_name.lower().replace(" ", "_")
-
     for entity_topic in topics['home_assistant'].keys():
         formatted = topics['home_assistant'][entity_topic].format(short_id)
-        mqtt_send(formatted, '')
+        mqtt_send(formatted, '', retain=True)
 
     for state_topic in topics.keys():
         if isinstance(topics[state_topic], str):
-            mqtt_send(topics[state_topic].format(short_id), '')
+            mqtt_send(topics[state_topic].format(short_id), '', retain=True)
 
     del(known_containers[short_id])
 
@@ -520,7 +515,7 @@ def cleanup_containers():
     # Remove any destroyed containers that have passed the TTL
     for short_container_id, destroyed_at in pending_destroy_operations.copy().items():
         if time() - destroyed_at > DESTROYED_CONTAINER_TTL:
-            print(f'Removing container {short_container_id} from MQTT.')
+            log(tag="Cleanup", message=f'Removing container {short_container_id} from MQTT.')
             unregister_container(short_container_id)
             del (pending_destroy_operations[short_container_id])
 
@@ -579,7 +574,7 @@ def readline_stats_thread():
 
             sleep(STATS_DELAY_SECONDS)
         except Exception as e:
-            print(f"ERROR: {e}")
+            log(tag="Error", message=f"{e}")
 
 
 def start_threads():
@@ -616,11 +611,11 @@ def process_events():
 
     if event['status'] == 'create':
         # Cancel any previous pending destroys and add this to known_containers.
-        print(f'Container {container_name} has been created.')
+        log(tag="Event", message=f'Container {container_name} has been created.')
 
-        if container_name in pending_destroy_operations:
-            print(f'Removing pending delete for {{container_name}}.')
-            del (pending_destroy_operations[container_name])
+        if short_container_id in pending_destroy_operations:
+            log(tag="Event", message=f'Removing pending delete for {{container_name}}.')
+            del (pending_destroy_operations[short_container_id])
 
         register_container({
             'name': container_name,
@@ -631,9 +626,11 @@ def process_events():
         })
     elif event['status'] == 'destroy':
         # Add this container to pending_destroy_operations.
-        print(f'Container {container_name} has been destroyed.')
+        log(tag="Event", message=f'Container {container_name} has been destroyed.')
         pending_destroy_operations[short_container_id] = time()
     elif event['status'] == "rename":
+        old_name = event['Actor']['Attributes']['oldName']
+        log(tag="Event", message=f"Container {old_name} renamed to {container_name}")
         register_container({
             'name': container_name,
             'image': event['from'],
@@ -669,7 +666,7 @@ if __name__ == '__main__':
     while True:
         try:
             if not connected_to_mqtt:
-                print("MQTT not connected: Retrying...")
+                log(tag="MQTT", message="MQTT not connected: Retrying...")
 
                 setup_mqtt()
                 if not mqtt_connect():
@@ -679,4 +676,4 @@ if __name__ == '__main__':
             else:
                 go()
         except Exception as e:
-            print(f"ERROR: {e}")
+            log(tag="Error", message=f"{e}")
