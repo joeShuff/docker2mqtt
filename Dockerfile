@@ -1,18 +1,11 @@
-FROM debian:stable
-ENV LC_ALL=C.UTF-8
-ENV LANG=C.UTF-8
+FROM python:3.10-slim-buster
 
-# Pre-reqs
-RUN apt update && \
-    apt install --no-install-recommends -y apt-transport-https ca-certificates curl gnupg gnupg-agent software-properties-common && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add - && \
-    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable" && \
-    apt update && \
-    apt install --no-install-recommends -y docker-ce-cli python3-paho-mqtt && \
-    rm -rf /var/lib/apt/lists/*
+COPY requirements.txt requirements.txt
+
+RUN pip3 install -r requirements.txt
 
 # Copy files into place
-COPY docker2mqtt /
+COPY . .
 
 # Set the entrypoint
-ENTRYPOINT ["/docker2mqtt"]
+CMD ["python3", "docker2mqtt.py"]
