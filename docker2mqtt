@@ -634,6 +634,7 @@ def process_events():
 
 
 def go():
+    mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'online', retain=True)
     process_events()
 
 
