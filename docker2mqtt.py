@@ -25,7 +25,7 @@ MQTT_TIMEOUT = int(environ.get('MQTT_TIMEOUT', '30'))
 MQTT_TOPIC_PREFIX = environ.get('MQTT_TOPIC_PREFIX', 'docker')
 MQTT_QOS = int(environ.get('MQTT_QOS', 1))
 DISCOVERY_TOPIC = f'{HOMEASSISTANT_PREFIX}/binary_sensor/{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}_{{}}/config'
-HA_DISCOVERY_CLEANUP_TOPIC = f'{HOMEASSISTANT_PREFIX}/+/docker-+/config'
+HA_DISCOVERY_CLEANUP_TOPIC = f'{HOMEASSISTANT_PREFIX}/+/+/+/config'
 WATCHED_EVENTS = ('create', 'destroy', 'die', 'pause', 'rename', 'start', 'stop', 'unpause')
 STATS_DELAY_SECONDS = int(environ.get('STATS_DELAY', '5'))
 
@@ -145,8 +145,9 @@ def on_mqtt_connect(client, userdata, flags, rc):
 
         log(tag="MQTT", message=f'Connected to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
 
-        cleanup_home_assistant_discovery()
-        register_all_containers()
+        # Discovery cleanup is performed after the MQTT network loop has started.
+        # This allows retained discovery messages to actually reach on_mqtt_message.
+        pass
     else:
         connected_to_mqtt = False
         log(tag="MQTT", message=f'Failed to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT} reason: {rc}')
@@ -156,8 +157,17 @@ def on_mqtt_message(client, userdata, msg):
     if MQTT_DEBUG:
         log(tag="MQTT", message="Message received->" + msg.topic + " > " + str(msg.payload.decode()))
 
-    if ha_discovery_cleanup_active and msg.topic.startswith(f"{HOMEASSISTANT_PREFIX}/"):
-        if msg.retain and msg.topic.count("/") == 3 and msg.topic.endswith("/config"):
+    if ha_discovery_cleanup_active:
+        parts = msg.topic.split("/")
+        # Expected docker2mqtt discovery topic:
+        # homeassistant/<component>/docker-<key>/<entity>/config
+        if (
+            msg.retain
+            and len(parts) == 5
+            and parts[0] == HOMEASSISTANT_PREFIX
+            and parts[2].startswith("docker-")
+            and parts[4] == "config"
+        ):
             mqtt_send(msg.topic, '', retain=True)
             log(tag="MQTT", message=f'Cleared Home Assistant discovery topic: {msg.topic}')
         return
@@ -239,6 +249,12 @@ def mqtt_connect(exit_on_fail=False):
         mqtt.subscribe(topics['commands'].format("+"))
 
         mqtt.loop_start()
+
+        # Clear any retained Home Assistant discovery entries belonging to
+        # docker2mqtt, then rebuild discovery from the current containers.
+        cleanup_home_assistant_discovery()
+        register_all_containers()
+
         mqtt_send(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'online', retain=True)
         return True
     except ConnectionRefusedError as e:
@@ -282,6 +298,8 @@ def cleanup_home_assistant_discovery():
 
     try:
         mqtt.subscribe(HA_DISCOVERY_CLEANUP_TOPIC, qos=MQTT_QOS)
+        # Give the MQTT loop time to receive retained discovery messages and
+        # let on_mqtt_message clear them.
         sleep(2)
     finally:
         mqtt.unsubscribe(HA_DISCOVERY_CLEANUP_TOPIC)
