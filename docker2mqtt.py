@@ -1,10 +1,9 @@
-import re
-
 #!/usr/bin/env python3
 """Listens to `docker system events` and sents container stop/start events to mqtt.
 """
 import json
 import queue
+import re
 from os import environ
 from socket import gethostname
 from subprocess import run, Popen, PIPE
@@ -26,6 +25,7 @@ MQTT_TIMEOUT = int(environ.get('MQTT_TIMEOUT', '30'))
 MQTT_TOPIC_PREFIX = environ.get('MQTT_TOPIC_PREFIX', 'docker')
 MQTT_QOS = int(environ.get('MQTT_QOS', 1))
 DISCOVERY_TOPIC = f'{HOMEASSISTANT_PREFIX}/binary_sensor/{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}_{{}}/config'
+HA_DISCOVERY_CLEANUP_TOPIC = f'{HOMEASSISTANT_PREFIX}/+/docker-+/config'
 WATCHED_EVENTS = ('create', 'destroy', 'die', 'pause', 'rename', 'start', 'stop', 'unpause')
 STATS_DELAY_SECONDS = int(environ.get('STATS_DELAY', '5'))
 
@@ -64,6 +64,7 @@ mqtt = paho.mqtt.client.Client()
 
 
 connected_to_mqtt = False
+ha_discovery_cleanup_active = False
 
 known_container_stats = {}
 
@@ -144,6 +145,7 @@ def on_mqtt_connect(client, userdata, flags, rc):
 
         log(tag="MQTT", message=f'Connected to MQTT server at {MQTT_HOST}:{MQTT_PORT}')
 
+        cleanup_home_assistant_discovery()
         register_all_containers()
     else:
         connected_to_mqtt = False
@@ -153,6 +155,12 @@ def on_mqtt_connect(client, userdata, flags, rc):
 def on_mqtt_message(client, userdata, msg):
     if MQTT_DEBUG:
         log(tag="MQTT", message="Message received->" + msg.topic + " > " + str(msg.payload.decode()))
+
+    if ha_discovery_cleanup_active and msg.topic.startswith(f"{HOMEASSISTANT_PREFIX}/"):
+        if msg.retain and msg.topic.count("/") == 3 and msg.topic.endswith("/config"):
+            mqtt_send(msg.topic, '', retain=True)
+            log(tag="MQTT", message=f'Cleared Home Assistant discovery topic: {msg.topic}')
+        return
 
     if not msg.topic.startswith(f"{MQTT_TOPIC_PREFIX}/"):
         return
@@ -264,6 +272,20 @@ def mqtt_send(topic, payload, retain=False, qos=MQTT_QOS):
             mqtt.publish(topic, payload=payload, qos=qos, retain=retain)
         except Exception as e:
             log(tag="MQTT", message=f'MQTT Publish Failed: {e}')
+
+def cleanup_home_assistant_discovery():
+    """Clear retained Home Assistant discovery entries before rebuilding them."""
+    global ha_discovery_cleanup_active
+
+    ha_discovery_cleanup_active = True
+    log(tag="MQTT", message=f'Cleaning Home Assistant discovery topics: {HA_DISCOVERY_CLEANUP_TOPIC}')
+
+    try:
+        mqtt.subscribe(HA_DISCOVERY_CLEANUP_TOPIC, qos=MQTT_QOS)
+        sleep(2)
+    finally:
+        mqtt.unsubscribe(HA_DISCOVERY_CLEANUP_TOPIC)
+        ha_discovery_cleanup_active = False
 
 '''
 CONTAINER MANAGEMENT
