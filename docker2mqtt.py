@@ -381,7 +381,6 @@ def register_container(container_entry):
         "state_topic": topics['state'].format(key),
         "name": f"{container_name} State",
         "unique_id": f"{DOCKER2MQTT_HOSTNAME}.{key}.state",
-        "entity_category": "config",
         "icon": "mdi:chart-line-variant"
     }
     state_discovery = topics['home_assistant']['state'].format(key)
@@ -392,7 +391,6 @@ def register_container(container_entry):
         "state_topic": topics['status'].format(key),
         "name": f"{container_name} Status",
         "unique_id": f"{DOCKER2MQTT_HOSTNAME}.{key}.status",
-        "entity_category": "config",
         "icon": "mdi:chart-line-variant"
     }
     status_discovery = topics['home_assistant']['status'].format(key)
@@ -403,7 +401,7 @@ def register_container(container_entry):
         "state_topic": topics['image'].format(key),
         "name": f"{container_name} Image",
         "unique_id": f"{DOCKER2MQTT_HOSTNAME}.{key}.image",
-        "entity_category": "config",
+        "entity_category": "diagnostic",
         "icon": "mdi:docker"
     }
     image_discovery = topics['home_assistant']['image'].format(key)
