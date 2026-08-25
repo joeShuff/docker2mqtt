@@ -1,5 +1,4 @@
-Library/
-docker2mqtt.py
+import re
 
 #!/usr/bin/env python3
 """Listens to `docker system events` and sents container stop/start events to mqtt.
