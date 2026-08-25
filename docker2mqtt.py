@@ -44,7 +44,7 @@ def container_key(container_name):
 
 def docker_size_to_bytes(value):
     """Convert Docker's human-readable size (e.g. 1.23GB) to bytes."""
-    match = re.match(r'^([0-9]+(?:\\.[0-9]+)?)\\s*([KMGTPE]?B)$', value.strip(), re.I)
+    match = re.match(r'^([0-9]+(?:\.[0-9]+)?)\s*([KMGTPE]?B)$', value.strip(), re.I)
     if not match:
         return 0
     number = float(match.group(1))
