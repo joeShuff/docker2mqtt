@@ -82,7 +82,7 @@ empty_container_stats = {
     "net_io": "OB / 0B",
     "pids": 0,
     "block_io": "0B / 0B",
-    "size": "0B"
+    "size": 0
 }
 
 topics = {
@@ -497,6 +497,7 @@ def register_container(container_entry):
         "name": f"{container_name} Writable Layer Size",
         "unique_id": f"{DOCKER2MQTT_HOSTNAME}.{key}.size",
         "unit_of_measurement": "B",
+        "suggested_unit_of_measurement": "GB",
         "device_class": "data_size",
         "state_class": "measurement",
         "entity_category": "diagnostic",
