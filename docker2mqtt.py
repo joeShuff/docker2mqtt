@@ -42,6 +42,15 @@ def container_key(container_name):
     key = ''.join(c if c.isalnum() or c in '_-' else '_' for c in container_name.lower())
     return key.strip('_') or 'container'
 
+
+# Host component used in container topics and HA discovery topics so that several
+# docker2mqtt instances can share one broker without overwriting each other.
+# Sanitised because HA discovery node ids only allow [a-zA-Z0-9_-].
+HOST_KEY = container_key(DOCKER2MQTT_HOSTNAME)
+
+# Node id prefixes of discovery topics owned by docker2mqtt (current, then legacy).
+DISCOVERY_NODE_PREFIXES = ('d2m-', 'docker-')
+
 def docker_size_to_bytes(value):
     """Convert Docker's human-readable size (e.g. 1.23GB) to bytes."""
     match = re.match(r'^([0-9]+(?:\.[0-9]+)?)\s*([KMGTPE]?B)$', value.strip(), re.I)
@@ -86,33 +95,33 @@ empty_container_stats = {
 }
 
 topics = {
-    "state": "docker/{}/state",
-    "status": "docker/{}/status",
-    "image": "docker/{}/image",
-    "cpu": "docker/{}/cpu",
-    "1cpu": "docker/{}/1cpu",
-    "memory": "docker/{}/memory",
-    "memory_usage": "docker/{}/memory_usage",
-    "net_io": "docker/{}/net_io",
-    "pids": "docker/{}/pids",
-    "block_io": "docker/{}/block_io",
-    "size": "docker/{}/size",
-    "commands": "docker/{}/commands",
+    "state": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/state",
+    "status": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/status",
+    "image": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/image",
+    "cpu": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/cpu",
+    "1cpu": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/1cpu",
+    "memory": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/memory",
+    "memory_usage": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/memory_usage",
+    "net_io": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/net_io",
+    "pids": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/pids",
+    "block_io": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/block_io",
+    "size": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/size",
+    "commands": f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/{{}}/commands",
     "home_assistant":{
-        "state": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/state/config",
-        "status": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/status/config",
-        "image": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/image/config",
-        "cpu": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/cpu/config",
-        "1cpu": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/1cpu/config",
-        "memory": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/memory/config",
-        "memory_usage": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/memory_usage/config",
-        "net_io": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/net_io/config",
-        "pids": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/pids/config",
-        "block_io": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/block_io/config",
-        "size": f"{HOMEASSISTANT_PREFIX}/sensor/docker-{{}}/size/config",
-        "stop": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/stop/config",
-        "start": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/start/config",
-        "restart": f"{HOMEASSISTANT_PREFIX}/button/docker-{{}}/restart/config",
+        "state": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/state/config",
+        "status": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/status/config",
+        "image": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/image/config",
+        "cpu": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/cpu/config",
+        "1cpu": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/1cpu/config",
+        "memory": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/memory/config",
+        "memory_usage": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/memory_usage/config",
+        "net_io": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/net_io/config",
+        "pids": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/pids/config",
+        "block_io": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/block_io/config",
+        "size": f"{HOMEASSISTANT_PREFIX}/sensor/d2m-{HOST_KEY}-{{}}/size/config",
+        "stop": f"{HOMEASSISTANT_PREFIX}/button/d2m-{HOST_KEY}-{{}}/stop/config",
+        "start": f"{HOMEASSISTANT_PREFIX}/button/d2m-{HOST_KEY}-{{}}/start/config",
+        "restart": f"{HOMEASSISTANT_PREFIX}/button/d2m-{HOST_KEY}-{{}}/restart/config",
     }
 }
 
@@ -153,6 +162,59 @@ def on_mqtt_connect(client, userdata, flags, rc):
         log(tag="MQTT", message=f'Failed to connect to MQTT server at {MQTT_HOST}:{MQTT_PORT} reason: {rc}')
 
 
+def discovery_config_belongs_to_this_host(payload):
+    """Return True only if a retained discovery payload was published by THIS docker host.
+
+    The cleanup subscription matches every `docker-*` discovery topic on the broker,
+    including ones owned by other docker2mqtt instances. The payload's device
+    identifier (`<hostname>:<name>`) and entity unique_id (`<hostname>.<name>.<entity>`)
+    both start with the publishing host's DOCKER2MQTT_HOSTNAME, so use those to
+    make sure we never clear another instance's entities.
+    """
+    try:
+        config = json.loads(payload)
+    except (ValueError, TypeError):
+        return False
+
+    if not isinstance(config, dict):
+        return False
+
+    device = config.get('device')
+    identifiers = device.get('identifiers') if isinstance(device, dict) else None
+    if isinstance(identifiers, str):
+        identifiers = [identifiers]
+    elif not isinstance(identifiers, (list, tuple)):
+        identifiers = []
+
+    if any(str(i).startswith(f"{DOCKER2MQTT_HOSTNAME}:") for i in identifiers):
+        return True
+
+    return str(config.get('unique_id', '')).startswith(f"{DOCKER2MQTT_HOSTNAME}.")
+
+
+def clear_legacy_state_topics(payload):
+    """Migration: clear retained state/command topics from the old host-less layout.
+
+    Older versions published to <prefix>/<container>/<stat>. Our own old discovery
+    config tells us which topics those were, so remove any that are not under the
+    new <prefix>/<host>/ namespace.
+    """
+    try:
+        config = json.loads(payload)
+    except (ValueError, TypeError):
+        return
+
+    if not isinstance(config, dict):
+        return
+
+    new_namespace = f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/"
+    for field in ('state_topic', 'command_topic'):
+        topic = config.get(field)
+        if isinstance(topic, str) and topic and not topic.startswith(new_namespace):
+            mqtt_send(topic, '', retain=True)
+            log(tag="MQTT", message=f'Cleared legacy topic: {topic}')
+
+
 def on_mqtt_message(client, userdata, msg):
     if MQTT_DEBUG:
         log(tag="MQTT", message="Message received->" + msg.topic + " > " + str(msg.payload.decode()))
@@ -160,26 +222,31 @@ def on_mqtt_message(client, userdata, msg):
     if ha_discovery_cleanup_active:
         parts = msg.topic.split("/")
         # Expected docker2mqtt discovery topic:
-        # homeassistant/<component>/docker-<key>/<entity>/config
+        # homeassistant/<component>/d2m-<host>-<key>/<entity>/config
+        # (older releases used docker-<key>; still matched here so they get migrated)
         if (
             msg.retain
             and len(parts) == 5
             and parts[0] == HOMEASSISTANT_PREFIX
-            and parts[2].startswith("docker-")
+            and parts[2].startswith(DISCOVERY_NODE_PREFIXES)
             and parts[4] == "config"
+            and msg.payload
+            and discovery_config_belongs_to_this_host(msg.payload)
         ):
             mqtt_send(msg.topic, '', retain=True)
             log(tag="MQTT", message=f'Cleared Home Assistant discovery topic: {msg.topic}')
+            clear_legacy_state_topics(msg.payload)
         return
 
-    if not msg.topic.startswith(f"{MQTT_TOPIC_PREFIX}/"):
+    if not msg.topic.startswith(f"{MQTT_TOPIC_PREFIX}/{HOST_KEY}/"):
         return
 
+    # Expected command topic: <prefix>/<host>/<container key>/commands
     topic_parts = msg.topic.split("/")
-    if len(topic_parts) != 3 or topic_parts[2] != "commands":
+    if len(topic_parts) != 4 or topic_parts[3] != "commands":
         return
 
-    key = topic_parts[1]
+    key = topic_parts[2]
     command = msg.payload.decode()
 
     if command == "---":
