@@ -69,8 +69,15 @@ def docker_size_to_bytes(value):
     }
     return int(number * units[unit])
 
-mqtt = paho.mqtt.client.Client()
+def new_mqtt_client():
+    """Create an MQTT client using the paho-mqtt 2.x callback API (falls back to 1.x)."""
+    callback_api = getattr(paho.mqtt.client, 'CallbackAPIVersion', None)
+    if callback_api is not None:
+        return paho.mqtt.client.Client(callback_api.VERSION2)
+    return paho.mqtt.client.Client()
 
+
+mqtt = new_mqtt_client()
 
 connected_to_mqtt = False
 ha_discovery_cleanup_active = False
@@ -146,7 +153,7 @@ def log(message, tag = "DOCKER2MQTT"):
 '''
 MQTT CALLBACKS
 '''
-def on_mqtt_connect(client, userdata, flags, rc):
+def on_mqtt_connect(client, userdata, flags, rc, properties=None):
     global connected_to_mqtt
 
     if rc == 0:
@@ -284,8 +291,12 @@ def on_mqtt_message(client, userdata, msg):
 
     mqtt_send(msg.topic, '---')
 
-def on_mqtt_disconnect(client, userdata, rc):
+def on_mqtt_disconnect(client, userdata, *args):
     global connected_to_mqtt
+
+    # paho 2.x (VERSION2): (disconnect_flags, reason_code, properties)
+    # paho 1.x:            (rc,)
+    rc = args[1] if len(args) >= 2 else (args[0] if args else None)
 
     log(tag="MQTT", message=f'Disconnected from MQTT server (reason:{rc})')
     connected_to_mqtt = False
@@ -297,7 +308,7 @@ MQTT MANAGEMENT
 def setup_mqtt():
     global mqtt
 
-    mqtt = paho.mqtt.client.Client()
+    mqtt = new_mqtt_client()
     mqtt.username_pw_set(username=MQTT_USER, password=MQTT_PASSWD)
     mqtt.will_set(f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status', 'offline', qos=MQTT_QOS, retain=True)
     mqtt.on_connect = on_mqtt_connect
