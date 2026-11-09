@@ -14,14 +14,14 @@ Module layout (see the d2m package):
 """
 from time import monotonic, sleep
 
-from d2m import mqtt_client
-from d2m.commands import handle_command
-from d2m.config import CONTAINER_EXCLUDE, CONTAINER_INCLUDE
-from d2m.containers import register_all_containers
-from d2m.docker_cli import get_docker_system_stats
-from d2m.mqtt_client import STATUS_TOPIC, mqtt_connect, mqtt_send, setup_mqtt
-from d2m.util import error, info, warning
-from d2m.workers import process_events, start_threads
+import mqtt_client
+from commands import handle_command
+from config import CONTAINER_EXCLUDE, CONTAINER_INCLUDE
+from containers import register_all_containers
+from docker_cli import get_docker_system_stats
+from mqtt_client import STATUS_TOPIC, mqtt_connect, mqtt_send, setup_mqtt
+from util import error, info, warning
+from workers import process_events, start_threads
 
 # Re-announce "online" this often (covers the broker publishing our last-will after a
 # dropped connection that paho then silently recovered from).
