@@ -26,4 +26,4 @@ RUN pip3 install -r requirements.txt
 COPY . .
 
 # Set the entrypoint
-CMD ["python3", "docker2mqtt.py"]
+CMD ["python3", "-m", "d2m.docker2mqtt"]
