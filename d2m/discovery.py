@@ -3,9 +3,11 @@
 Each entity is described once in the tables below; build_discovery_messages()
 turns them into (discovery topic, config) pairs.
 """
+import re
+
 from .config import (DOCKER2MQTT_HOSTNAME, EXPIRE_AFTER_SECONDS, MQTT_QOS, MQTT_TOPIC_PREFIX,
                      SIZE_DISPLAY_PRECISION, SIZE_HA_UNIT)
-from .topics import payload_commands, topics
+from .topics import HOST_KEY, payload_commands, topics
 
 DIAGNOSTIC = {"entity_category": "diagnostic"}
 DISABLED = {"enabled_by_default": False}
@@ -50,6 +52,20 @@ BUTTONS = [
 ]
 
 
+def _default_entity_id(component, key, label):
+    """Host-prefixed entity id, e.g. sensor.teddycctv_netdata_cpu_usage.
+
+    Home Assistant builds entity ids from the device and entity *names*, which do not
+    contain the host. Two hosts running a container with the same name would then fight
+    over the same id (the second one becomes ..._2). Suggesting the id explicitly keeps
+    them apart. It only applies when an entity is first created: existing entities keep
+    their current id.
+    """
+    parts = (HOST_KEY, key, label)
+    slug = '_'.join(re.sub(r'[^a-z0-9]+', '_', part.lower()).strip('_') for part in parts)
+    return f"{component}.{slug}"
+
+
 def _base_config(container_name, container_image, key):
     return {
         'availability_topic': f'{MQTT_TOPIC_PREFIX}/{DOCKER2MQTT_HOSTNAME}/status',
@@ -76,6 +92,7 @@ def build_discovery_messages(container_name, container_image, key):
             "state_topic": topics[topic_key].format(key),
             "name": f"{container_name} {label}",
             "unique_id": f"{DOCKER2MQTT_HOSTNAME}.{key}.{unique_suffix}",
+            "default_entity_id": _default_entity_id("sensor", key, label),
             **extra,
         }
         messages.append((topics['home_assistant'][topic_key].format(key), config))
@@ -86,6 +103,7 @@ def build_discovery_messages(container_name, container_image, key):
             "state_topic": topics[topic_key].format(key),
             "name": f"{container_name} {label}",
             "unique_id": f"{DOCKER2MQTT_HOSTNAME}.{key}.{unique_suffix}",
+            "default_entity_id": _default_entity_id("binary_sensor", key, label),
             **extra,
         }
         messages.append((topics['home_assistant'][ha_key].format(key), config))
@@ -96,6 +114,7 @@ def build_discovery_messages(container_name, container_image, key):
             "command_topic": topics['commands'].format(key),
             "name": f"{container_name} {label}",
             "unique_id": f"{DOCKER2MQTT_HOSTNAME}.{key}.{command}",
+            "default_entity_id": _default_entity_id("button", key, label),
             "icon": icon,
             "payload_press": payload_commands[command],
         }
